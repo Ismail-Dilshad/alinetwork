@@ -1,0 +1,62 @@
+# infra/docker/compose.dev.yml — local development (laptops, AI agents, CI)
+# Start:  docker compose -f infra/docker/compose.dev.yml up -d
+# Stop:   docker compose -f infra/docker/compose.dev.yml down
+# Reset:  docker compose -f infra/docker/compose.dev.yml down -v
+# Analytics (ClickHouse) only when needed:  ... --profile analytics up -d
+
+name: alinetwork-dev
+
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: alinetwork
+      POSTGRES_PASSWORD: alinetwork
+      POSTGRES_DB: alinetwork_dev
+    ports: ["5432:5432"]
+    volumes: ["pg-data:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U alinetwork"]
+      interval: 5s
+      retries: 10
+
+  valkey: # Redis-compatible
+    image: valkey/valkey:8
+    ports: ["6379:6379"]
+
+  meilisearch:
+    image: getmeili/meilisearch:v1.15
+    environment:
+      MEILI_ENV: development
+      MEILI_MASTER_KEY: dev-master-key-change-me
+    ports: ["7700:7700"]
+    volumes: ["meili-data:/meili_data"]
+
+  # S3-compatible storage for local dev only (production uses Cloudflare R2).
+  # MinIO stopped publishing free Docker images in Oct 2025, so we use RustFS.
+  s3:
+    image: rustfs/rustfs:latest
+    environment:
+      RUSTFS_ACCESS_KEY: devaccess
+      RUSTFS_SECRET_KEY: devsecret123
+    ports: ["9000:9000"]
+    volumes: ["s3-data:/data"]
+
+  mailpit: # catches every email the app sends; UI on http://localhost:8025
+    image: axllent/mailpit:latest
+    ports: ["1025:1025", "8025:8025"]
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:25.8
+    profiles: ["analytics"]
+    environment:
+      CLICKHOUSE_USER: alinetwork
+      CLICKHOUSE_PASSWORD: alinetwork
+    ports: ["8123:8123"]
+    volumes: ["ch-data:/var/lib/clickhouse"]
+
+volumes:
+  pg-data:
+  meili-data:
+  s3-data:
+  ch-data:

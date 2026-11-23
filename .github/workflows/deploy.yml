@@ -1,0 +1,72 @@
+# .github/workflows/deploy.yml
+# main branch  → tests → staging (automatic)
+# tag v1.2.3   → tests → production (needs approval in the "production" environment)
+#
+# Repo secrets needed: VPS_HOST, VPS_USER (deploy), VPS_SSH_KEY (private key for deploy user)
+
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: alinetwork
+          POSTGRES_PASSWORD: alinetwork
+          POSTGRES_DB: alinetwork_test
+        ports: ["5432:5432"]
+        options: --health-cmd "pg_isready -U alinetwork" --health-interval 5s --health-retries 10
+      valkey:
+        image: valkey/valkey:8
+        ports: ["6379:6379"]
+    env:
+      DATABASE_URL: postgres://alinetwork:alinetwork@localhost:5432/alinetwork_test
+      REDIS_URL: redis://localhost:6379/0
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm turbo run lint typecheck test build
+
+  deploy-staging:
+    if: github.ref == 'refs/heads/main'
+    needs: test
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 30m
+          script: /srv/alinetwork/infra/scripts/deploy.sh staging ${{ github.sha }}
+
+  deploy-production:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: test
+    runs-on: ubuntu-latest
+    environment: production   # add yourself as required reviewer in repo settings
+    steps:
+      - uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 30m
+          script: /srv/alinetwork/infra/scripts/deploy.sh production ${{ github.ref_name }}

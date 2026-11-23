@@ -1,0 +1,128 @@
+# infra/caddy/Caddyfile — AliNetwork (linked to /etc/caddy/Caddyfile)
+# Each address = its own site block = its own process or folder.
+# Moving a part to another server later = change its DNS record + its block here.
+# Check before reload:  caddy validate --config /etc/caddy/Caddyfile
+# Apply:                systemctl reload caddy
+
+{
+	email admin@alinetwork.store
+}
+
+# ---------- shared snippets ----------
+(security) {
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+	encode zstd gzip
+	log {
+		output file /var/log/caddy/access.log {
+			roll_size 50MiB
+			roll_keep 10
+		}
+	}
+}
+
+(spa) {
+	# Static React app: real files first, otherwise index.html
+	try_files {path} /index.html
+	file_server
+	@assets path /assets/*
+	header @assets Cache-Control "public, max-age=31536000, immutable"
+	header /index.html Cache-Control "no-cache"
+}
+
+(private) {
+	# Keeps search engines and strangers out (ops + staging)
+	header X-Robots-Tag "noindex, nofollow"
+	basic_auth {
+		# create with:  caddy hash-password
+		team $2a$14$REPLACE_WITH_HASH
+	}
+}
+
+# ======================= PRODUCTION =======================
+
+# Online shop: Next.js on PM2 (prod-storefront)
+alinetwork.store {
+	import security
+	reverse_proxy 127.0.0.1:3000
+}
+
+www.alinetwork.store {
+	redir https://alinetwork.store{uri} permanent
+}
+
+# Backend API: NestJS on PM2 (prod-api). POS sync at /v1/pos/sync.
+api.alinetwork.store {
+	import security
+	request_body {
+		max_size 25MB
+	}
+	reverse_proxy 127.0.0.1:4000 {
+		health_uri /health
+		health_interval 10s
+	}
+}
+
+# Business console: static files
+manage.alinetwork.store {
+	import security
+	header X-Robots-Tag "noindex, nofollow"
+	root * /srv/alinetwork/production/current/apps/console/dist
+	import spa
+}
+
+# System admin console: static files + login gate (+ optional IP allowlist)
+ops.alinetwork.store {
+	import security
+	# Allow only your own IPs (uncomment and edit):
+	# @outside not remote_ip 203.0.113.10 198.51.100.0/24
+	# respond @outside 403
+	import private
+	root * /srv/alinetwork/production/current/apps/admin/dist
+	import spa
+}
+
+# cdn.alinetwork.store → NOT on this server.
+#   It is a custom domain on the Cloudflare R2 bucket "alinetwork-media".
+# status.alinetwork.store → NOT on this server.
+#   CNAME to a hosted status page, so it stays up if this server is down.
+
+# LATER, only if POS sync needs separate scaling (Go service):
+# sync.alinetwork.store {
+# 	import security
+# 	reverse_proxy 127.0.0.1:4500
+# }
+
+# ======================= STAGING =======================
+# Flat names (staging-api, not api.staging): Cloudflare's free certificate
+# covers only one subdomain level when the proxy is on.
+
+staging.alinetwork.store {
+	import security
+	import private
+	reverse_proxy 127.0.0.1:3100
+}
+
+staging-api.alinetwork.store {
+	import security
+	header X-Robots-Tag "noindex, nofollow"
+	reverse_proxy 127.0.0.1:4100
+}
+
+staging-manage.alinetwork.store {
+	import security
+	import private
+	root * /srv/alinetwork/staging/current/apps/console/dist
+	import spa
+}
+
+staging-ops.alinetwork.store {
+	import security
+	import private
+	root * /srv/alinetwork/staging/current/apps/admin/dist
+	import spa
+}

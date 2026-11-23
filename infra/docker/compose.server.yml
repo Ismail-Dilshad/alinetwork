@@ -1,0 +1,82 @@
+# infra/docker/compose.server.yml — data services on the VPS
+# Apps run on PM2. Images live on Cloudflare R2 (not on this server).
+# Every port is bound to 127.0.0.1: nothing here is reachable from the internet.
+#
+# Start:  docker compose -f /srv/alinetwork/infra/docker/compose.server.yml \
+#           --env-file /srv/alinetwork/secrets/data.env up -d
+
+name: alinetwork
+
+x-logging: &logging
+  logging:
+    driver: json-file
+    options: { max-size: "20m", max-file: "5" }
+
+services:
+  postgres:
+    image: postgres:17
+    restart: unless-stopped
+    <<: *logging
+    environment:
+      POSTGRES_USER: ${PG_SUPERUSER}
+      POSTGRES_PASSWORD: ${PG_SUPERPASSWORD}
+      PROD_DB_PASSWORD: ${PROD_DB_PASSWORD}
+      STAGING_DB_PASSWORD: ${STAGING_DB_PASSWORD}
+    volumes:
+      - /srv/alinetwork/data/postgres:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+      - /srv/alinetwork/backups/postgres:/backups
+    ports: ["127.0.0.1:5432:5432"]
+    shm_size: 1g
+    # Tuned for KVM 8 (32 GB RAM) shared with the apps
+    command: >
+      postgres
+      -c shared_buffers=6GB
+      -c effective_cache_size=16GB
+      -c work_mem=32MB
+      -c maintenance_work_mem=1GB
+      -c max_connections=200
+      -c random_page_cost=1.1
+      -c log_min_duration_statement=500
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PG_SUPERUSER}"]
+      interval: 10s
+      retries: 5
+
+  valkey-prod: # Redis-compatible: cache, queues, locks
+    image: valkey/valkey:8
+    restart: unless-stopped
+    <<: *logging
+    command: ["valkey-server", "--appendonly", "yes", "--requirepass", "${VALKEY_PROD_PASSWORD}",
+              "--maxmemory", "2gb", "--maxmemory-policy", "noeviction"]
+    volumes: ["/srv/alinetwork/data/valkey-prod:/data"]
+    ports: ["127.0.0.1:6379:6379"]
+
+  valkey-staging:
+    image: valkey/valkey:8
+    restart: unless-stopped
+    <<: *logging
+    command: ["valkey-server", "--requirepass", "${VALKEY_STAGING_PASSWORD}", "--maxmemory", "256mb"]
+    ports: ["127.0.0.1:6380:6379"]
+
+  meilisearch: # one instance; prod and staging use separate index prefixes and API keys
+    image: getmeili/meilisearch:v1.15
+    restart: unless-stopped
+    <<: *logging
+    environment:
+      MEILI_ENV: production
+      MEILI_MASTER_KEY: ${MEILI_MASTER_KEY}
+      MEILI_NO_ANALYTICS: "true"
+    volumes: ["/srv/alinetwork/data/meili:/meili_data"]
+    ports: ["127.0.0.1:7700:7700"]
+
+  # Phase 3 (owner dashboards). Until then reports read from Postgres.
+  # clickhouse:
+  #   image: clickhouse/clickhouse-server:25.8
+  #   restart: unless-stopped
+  #   <<: *logging
+  #   environment:
+  #     CLICKHOUSE_USER: alinetwork
+  #     CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
+  #   volumes: ["/srv/alinetwork/data/clickhouse:/var/lib/clickhouse"]
+  #   ports: ["127.0.0.1:8123:8123"]

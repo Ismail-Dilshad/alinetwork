@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pnpm:*)",
+      "Bash(npx:*)",
+      "Bash(node:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(docker compose -f infra/docker/compose.dev.yml:*)"
+    ],
+    "deny": [
+      "Bash(git push:*)",
+      "Bash(rm -rf /*)",
+      "Read(./infra/env/*.env)",
+      "Read(./**/.env.production)"
+    ]
+  }
+}
